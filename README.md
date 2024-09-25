@@ -1,6 +1,6 @@
-### スケジュールの提案
+### スケジュールの提案 (1日7時間 × 2日 = 14時間の開発)
 
-#### **Day 1 - 4 hours**
+#### **Day 1 - 7 hours**
 ##### **午後 (1時間)**
 1. **チームミーティング (1時間)**
    - 全体の設計確認、役割分担を決定。
@@ -27,7 +27,7 @@
 ##### **午前 (3時間)**
 4. **フロントエンド開発 (Person A: 3時間)**
    - **タスク**:
-     - 送金フォームに金額入力とメッセージ入力フィールドを実装。
+     - LINEbotの送金フォームに金額入力とメッセージ入力フィールドを実装。
      - ユーザーが送金データを入力できる状態にする。
    - **達成目標**:
      - 送金額やメッセージ入力のUI完成。
@@ -71,27 +71,53 @@
 
 ---
 
-### アーキテクチャー図
+### ER図
+[送金者] 1..*----(送金)---> 1..* [送金履歴] 1..*----(受取)---> 1..* [受取者]
 
-```
-フロントエンド
-└── Next.js (App Router)
-    ├── ユーザーインターフェース (送金メニュー, フォーム)
-    └── LINE Botとのやり取り (APIリクエスト)
+送金者
+- ユーザーID (PK)
+- LINE ユーザーID
+- 氏名
 
-バックエンド
-└── Express.js
-    ├── Prismaを通じてPostgreSQLと接続
-    ├── 振込APIを使用して送金処理
-    ├── LINE Botからのリクエスト処理
-    └── URL生成と送信者・受取人管理
+送金履歴
+- 送金ID (PK)
+- 送金者ID (FK)
+- 送金金額
+- 送金日時
+- メッセージ
+- 送金種類
 
-データベース
-└── PostgreSQL
-    └── ユーザー情報、送金履歴の管理
-```
+受取者
+- 受取ID (PK)
+- 送金ID (FK)
+- 口座番号
+- 受取日時
 
-このアーキテクチャ図は、フロントエンドがユーザー入力を受け取り、バックエンドにAPIリクエストを送り、データベースを使って送金情報を管理し、振込処理やLINE Botとのやり取りを行う流れを示しています。
+###　API設計図作成
 
-これでデモが行える状態のアプリを2日間で仕上げる計画となります。
+POST /api/transactions: 新しい送金を作成する
+body: { userId, amount, type, message }
+GET /api/transactions/:id: 特定の送金の詳細を取得する
+POST /api/receive: 送金を受け取るためのURLを生成する
+body: { transactionId, bankAccount }
 
+### DB設計図
+
+##### Users テーブル
+
+ID (Primary Key)
+Name
+LineID
+
+#####  Transactions テーブル
+ID (Primary Key)
+UserID (Foreign Key)
+Amount
+Type
+Message
+
+##### Accounts テーブル
+ID (Primary Key)
+UserID (Foreign Key)
+AccountNumber
+BankName
