@@ -93,7 +93,7 @@
 - 口座番号
 - 受取日時
 
-###　API設計図作成
+### API設計図作成
 
 POST /api/transactions: 新しい送金を作成する
 body: { userId, amount, type, message }
