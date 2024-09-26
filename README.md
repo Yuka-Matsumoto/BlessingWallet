@@ -115,9 +115,3 @@ UserID (Foreign Key)
 Amount
 Type
 Message
-
-##### Accounts テーブル
-ID (Primary Key)
-UserID (Foreign Key)
-AccountNumber
-BankName
