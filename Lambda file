@@ -1,0 +1,241 @@
+'use strict';
+
+const axios = require('axios');
+const request = require('request');  // 振込API用のリクエストライブラリ
+const LINE_MESSAGING_API = 'https://api.line.me/v2/bot/message/reply';
+const LINE_ACCESS_TOKEN = 'onxgcwhsKiZRGx34qzgwbpoxMo5ecpyw+L4a93Ijr2fKBcTwHC3FZCSCIF9JfV1ncVrwYMLw15qwCnm1AD6PS1j017628jRbONrs4al3Piy0sTg9wCt2RuTJz8JlvXYNMmardxFV4R4Zf66gnVtxNAdB04t89/1O/w1cDnyilFU=';
+const sunabarToken = 'ODFmZWI1ZjY5NGFjNjIyYjE4MWJiOTMx'; // Sunabar APIのトークン
+
+// ユーザーの状態を管理する
+let userState = {};
+let transferData = {}; // 振込に必要なデータを保存
+
+// Lambdaのハンドラ関数
+exports.handler = async (event) => {
+    const body = JSON.parse(event.body);
+    const replyToken = body.events[0].replyToken;
+    const userMessage = body.events[0].message.text;
+    const userId = body.events[0].source.userId;
+
+    let replyMessage;
+
+    // ユーザーの進行状況を確認
+    if (!userState[userId]) {
+        userState[userId] = 'START';
+        transferData[userId] = {}; // 振込データの初期化
+    }
+
+    switch (userState[userId]) {
+        // ①"お祝い金"と入力された場合
+        case 'START':
+            if (userMessage === 'お祝い金') {
+                replyMessage = {
+                    type: 'text',
+                    text: 'お祝い金を送るね！\n送信者を教えて！'
+                };
+                userState[userId] = 'SENDER';
+            } else {
+                replyMessage = {
+                    type: 'text',
+                    text: '「お祝い金」と入力してください。'
+                };
+            }
+            break;
+
+        // 送信者の名前を受け取った場合
+        case 'SENDER':
+            transferData[userId].sender = userMessage;
+            replyMessage = {
+                type: 'text',
+                text: '送金金額を入力してね！'
+            };
+            userState[userId] = 'AMOUNT';
+            break;
+
+        // 送金金額を受け取った場合
+        case 'AMOUNT':
+            if (isNumeric(userMessage)) {
+                transferData[userId].amount = userMessage;
+                replyMessage = {
+                    type: 'text',
+                    text: '自分の口座情報を入力してね！\n銀行名：\n支店名：\n預金科目：\n口座番号：'
+                };
+                userState[userId] = 'SENDER_BANK';
+            } else {
+                replyMessage = {
+                    type: 'text',
+                    text: '有効な金額を入力してください。'
+                };
+            }
+            break;
+
+        // 自分の口座情報を受け取った場合
+        case 'SENDER_BANK':
+            if (isValidBankInfo(userMessage)) {
+                transferData[userId].senderBankInfo = userMessage;
+                replyMessage = {
+                    type: 'text',
+                    text: '相手の口座情報を入力してね！\n銀行名：\n支店名：\n預金科目：\n口座番号：'
+                };
+                userState[userId] = 'RECIPIENT_BANK';
+            } else {
+                replyMessage = {
+                    type: 'text',
+                    text: '有効な口座情報を入力してください。'
+                };
+            }
+            break;
+
+        // 相手の口座情報を受け取った場合
+        case 'RECIPIENT_BANK':
+            if (isValidBankInfo(userMessage)) {
+                transferData[userId].recipientBankInfo = userMessage;
+                replyMessage = {
+                    type: 'text',
+                    text: 'メッセージを入力してね！'
+                };
+                userState[userId] = 'MESSAGE';
+            } else {
+                replyMessage = {
+                    type: 'text',
+                    text: '有効な口座情報を入力してください。'
+                };
+            }
+            break;
+
+        // メッセージを受け取った場合
+        case 'MESSAGE':
+            transferData[userId].message = userMessage;
+            replyMessage = {
+                type: 'text',
+                text: 'メッセージを受け取りました。振込処理してもいいですか。「はい」または「いいえ」と入力してください。'
+            };
+            userState[userId] = 'CONFIRM';
+            break;
+
+        // 振込の確認
+        case 'CONFIRM':
+            if (userMessage === 'はい') {
+                await callTransferAPI(userId, replyToken);
+                replyMessage = {
+                    type: 'text',
+                    text: '振込は未承認です。受付番号: ${applyNo}'
+                };
+                userState[userId] = 'COMPLETE';
+            } else if (userMessage === 'いいえ') {
+                replyMessage = {
+                    type: 'text',
+                    text: '振込をキャンセルしました。'
+                };
+                userState[userId] = 'CANCELLED';
+            } else {
+                replyMessage = {
+                    type: 'text',
+                    text: '「はい」または「いいえ」と入力してください。'
+                };
+            }
+            break;
+
+        // その他のケース
+        default:
+            replyMessage = {
+                type: 'text',
+                text: 'エラーが発生しました。もう一度試してください。'
+            };
+            userState[userId] = 'START';
+            break;
+    }
+
+    // LINE APIに返信
+    await sendReply(replyToken, replyMessage);
+
+    return {
+        statusCode: 200,
+        body: JSON.stringify({
+            message: 'OK'
+        }),
+    };
+};
+
+// 振込APIを呼び出す関数
+const callTransferAPI = async (userId, replyToken) => {
+    const transferInfo = transferData[userId];
+    
+    // 振込API呼び出しオプション
+    const options = {
+        method: 'POST',
+        url: 'https://api.sunabar.gmo-aozora.com/personal/v1/transfer/request',
+        headers: {
+            'Accept': 'application/json;charset=UTF-8',
+            'Content-Type': 'application/json;charset=UTF-8',
+            'x-access-token': sunabarToken
+        },
+        body: JSON.stringify({
+            "accountId": "301010009256", // 自分の口座ID
+            "transferDesignatedDate": new Date().toISOString().slice(0, 10), // 当日の日付
+            "transferDateHolidayCode": "1",
+            "totalCount": "1",
+            "totalAmount": transferInfo.amount,
+            "transfers": [
+                {
+                    "itemId": "1",
+                    "transferAmount": transferInfo.amount,
+                    "beneficiaryBankCode": "0310", // 相手の銀行コード
+                    "beneficiaryBranchCode": "301", // 相手の支店コード
+                    "accountTypeCode": "1", // 預金科目（普通預金）
+                    "accountNumber": "0009270", // 相手の口座番号
+                    "beneficiaryName": "ｽﾅﾊﾞ ｶﾂﾖｼ" // 受取人名
+                }
+            ]
+        })
+    };
+
+    // 振込処理後のコールバック処理
+    request(options, function (error, response) {
+        let resMessage;
+        if (error) {
+            console.error("Error calling the transfer API:", error);
+            resMessage = "振込の実行に失敗しました";
+        } else {
+            const transferResponse = JSON.parse(response.body);
+            const applyNo = transferResponse.applyNo;
+            const resultCode = transferResponse.resultCode;
+
+            // 振込処理の結果に基づいてメッセージを構築
+            if (resultCode === "1") {
+                resMessage = `振込が完了しました。受付番号: ${applyNo}`;
+            } else {
+                resMessage = `振込は未承認です。受付番号: ${applyNo}`;
+            }
+        }
+
+        // 振込結果をLINEbotに送信
+        sendReply(replyToken, { type: 'text', text: resMessage })
+          .catch((err) => {
+            console.error("Error sending reply to LINE:", err);
+          });
+    });
+};
+
+// LINE APIにメッセージを返信する関数
+const sendReply = async (replyToken, message) => {
+    await axios.post(LINE_MESSAGING_API, {
+        replyToken: replyToken,
+        messages: [message]
+    }, {
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${LINE_ACCESS_TOKEN}`
+        }
+    });
+};
+
+// 金額が数値かどうかをチェックする関数
+const isNumeric = (str) => {
+    return !isNaN(str) && !isNaN(parseFloat(str));
+};
+
+// 口座情報が有効かどうかをチェックする関数
+const isValidBankInfo = (info) => {
+    return info.length >= 10; // 口座情報のバリデーション（必要に応じて拡張可能）
+};
